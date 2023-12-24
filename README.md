@@ -1,2 +1,2 @@
 # coding-challenges
-List of coding challenges from [codingchallenges.fyi](codingchallenges.fyi)
+List of coding challenges from [codingchallenges.fyi](https://codingchallenges.fyi)
