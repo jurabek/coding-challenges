@@ -1,8 +1,9 @@
-use std::fmt::Display;
+use std::fmt;
 // use std::fmt::format;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
+use std::io::Read;
 // use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -11,7 +12,7 @@ use clap::Arg;
 use clap::ArgAction;
 use clap::Command;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let m = Command::new("wc-tool")
         .author("Jurabek")
         .version("0.0.1")
@@ -44,64 +45,46 @@ fn main() {
             Arg::new("file")
                 .index(1)
                 .value_name("FILE")
-                .help("Files to process")
-                .default_value("test.txt"),
+                .help("Files to process"),
         )
         .after_help("Coding challenge building unix WC tool in Rust")
         .get_matches();
 
-    let path = Path::new(m.get_one::<String>("file").unwrap());
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(why) => panic!("couldn't open {}: {}", path.display(), why),
-    };
+    let display_bytes = m.get_flag("count");
+    let display_lines = m.get_flag("lines");
+    let display_words = m.get_flag("words");
+    let display_chars = m.get_flag("chars");
 
-    let mut stats: Stats = Stats {
-        lines: 0,
-        words: 0,
-        bytes: 0,
-        chars: 0,
-        file_name: path.file_name().unwrap().to_str().unwrap().to_string(),
-    };
+    let no_flags_set = ![display_bytes, display_lines, display_words, display_chars]
+        .iter()
+        .any(|&x| x);
 
-    if m.get_flag("count") {
-        stats.bytes = file.metadata().unwrap().len();
-    }
+    let mut stats = Stats::new(
+        display_lines || no_flags_set,
+        display_words || no_flags_set,
+        display_bytes || no_flags_set,
+        display_chars || no_flags_set,
+    );
 
-    let (lines_count, word_count, number_of_chars) = file_lines_and_words_count(file);
-
-    if m.get_flag("lines") {
-        stats.lines = lines_count;
-    }
-    if m.get_flag("words") {
-        stats.words = word_count;
-    }
-    if m.get_flag("chars") {
-        stats.chars = number_of_chars;
-    }
-    
-    match io::stdout().write_all(format!("{}", stats).as_bytes()) {
-        Ok(_) => {}
-        Err(why) => panic!("couldn't write to stdout: {}", why),
-    }
-}
-
-fn file_lines_and_words_count(file: File) -> (u64, u64, u64) {
-    let mut lines_count: u64 = 0;
-    let mut word_count: usize = 0;
-    let mut number_of_chars = 0;
-
-    for line in io::BufReader::new(file).lines() {
-        match line {
-            Ok(l) => {
-                word_count += l.split_whitespace().count();
-                lines_count += 1;
-                number_of_chars += l.chars().count();
-            }
-            Err(why) => panic!("couldn't read line: {}", why),
+    match m.get_one::<String>("file") {
+        Some(file_name) => {
+            let path: &Path = Path::new(file_name);
+            let file = File::open(&path)?;
+            let metadata = file.metadata()?;
+            stats.bytes = metadata.len();
+            stats.file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+            let reader = io::BufReader::new(file);
+            stats.update_from_reader(reader);
+        }
+        None => {
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+            stats.bytes = stdin.bytes().size_hint().0 as u64;
+            stats.update_from_reader(reader);
         }
     }
-    (lines_count, word_count as u64, number_of_chars as u64)
+    println!("{}", stats);
+    return Ok(());
 }
 
 struct Stats {
@@ -110,10 +93,60 @@ struct Stats {
     bytes: u64,
     chars: u64,
     file_name: String,
+    display_lines: bool,
+    display_words: bool,
+    display_bytes: bool,
+    display_chars: bool,
 }
 
-impl Display for Stats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-       write!(f, "{}    {}  {}  {}", self.lines, self.words, self.bytes, self.file_name) 
+impl Stats {
+    fn new(
+        display_lines: bool,
+        display_words: bool,
+        display_bytes: bool,
+        display_chars: bool,
+    ) -> Stats {
+        Stats {
+            lines: 0,
+            words: 0,
+            bytes: 0,
+            chars: 0,
+            file_name: String::new(),
+            display_lines,
+            display_words,
+            display_bytes,
+            display_chars,
+        }
+    }
+
+    fn update(&mut self, line: &str) {
+        self.words += line.split_whitespace().count() as u64;
+        self.lines += 1;
+        self.chars += line.chars().count() as u64;
+    }
+
+    fn update_from_reader<R: BufRead>(&mut self, reader: R) {
+        for line in reader.lines() {
+            let line = line.expect("Error reading line");
+            self.update(&line);
+        }
+    }
+}
+
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.display_bytes {
+            write!(f, "{} ", self.bytes)?;
+        }
+        if self.display_lines {
+            write!(f, "{} ", self.lines)?;
+        }
+        if self.display_words {
+            write!(f, "{} ", self.words)?;
+        }
+        if self.display_chars {
+            write!(f, "{} ", self.chars)?;
+        }
+        write!(f, "{}", self.file_name)
     }
 }
